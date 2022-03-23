@@ -1,0 +1,590 @@
+---
+title: "Etude de Marché"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+  html_notebook: default
+---
+
+## Préparation des données
+```{r message=FALSE, warning=FALSE}
+
+library(readr) # lecture csv
+library(tidyr) # pivot table
+
+pays <-  read_csv2("P9_01_donnees/CodePays.csv")
+
+Pop17 <- read_csv("P9_01_donnees/Pop17.csv")
+
+Pop17 <- Pop17[c('Code zone', 'Zone', 'Année' ,'Valeur')]
+
+POP17 <- spread(Pop17, Année, Valeur)
+
+m <-is.na(POP17$`2017`) 
+
+names(POP17)[3]<-'Population'
+
+POP17[3] <- POP17[3]*1000
+
+POP17<-POP17[c('Code zone','Population')]
+
+Codes_Pays = merge(pays, POP17, by='Code zone', all.x=TRUE)
+
+Dispo_alim_general_animaux_17 <-  read_csv("P9_01_donnees/Dispo_alim_general_animaux_17.csv")
+
+Dispo_alim_general_animaux_17 <- Dispo_alim_general_animaux_17[c('Code zone','Élément','Produit','Valeur')]
+
+Dispo_alim_general_animaux_17['Element_Produit']=paste(Dispo_alim_general_animaux_17$Élément,Dispo_alim_general_animaux_17$Produit)
+
+Dispo_alim_general_animaux_17 <- Dispo_alim_general_animaux_17[,c('Code zone','Element_Produit','Valeur')]
+
+Dispo_alim_general_animaux_17<- spread(Dispo_alim_general_animaux_17, Element_Produit, Valeur)
+
+Codes_Pays<-merge(Codes_Pays, Dispo_alim_general_animaux_17, by='Code zone', all.x=TRUE)
+
+prix_production_poulet_17 <- read_csv("P9_01_donnees/prix_production_poulet_17.csv")
+
+prix_production_poulet_17 <-prix_production_poulet_17[c('Code zone (FAO)', 'Valeur')]
+
+names(prix_production_poulet_17) <- c('Code zone', 'prix_production_poulet__usd_tonne')
+
+Codes_Pays = merge(Codes_Pays, prix_production_poulet_17, by='Code zone', all.x=TRUE)
+
+imp_prod_dispo_17 <- read_csv("P9_01_donnees/imp_prod_dispo_17.csv")
+
+imp_prod_dispo_17<- imp_prod_dispo_17[c('Code zone', 'Élément', 'Valeur')]
+
+imp_prod_dispo_17 <-spread(imp_prod_dispo_17,Élément,Valeur)
+
+names(imp_prod_dispo_17)<-c('Code zone','dispo_alim_volaille_ktonne','Importations_volaille_ktonne','Production_volaille_ktonne')
+
+Codes_Pays = merge(Codes_Pays, imp_prod_dispo_17, by='Code zone', all.x=TRUE)
+
+PIB_par_habitant_17 <- read_csv("P9_01_donnees/PIB_par_habitant_17.csv")
+
+PIB_par_habitant_17 = PIB_par_habitant_17[c('Code zone (FAO)','Valeur')]
+
+names(PIB_par_habitant_17)<-c('Code zone','PIB_habitant_US_dollar')
+
+Codes_Pays=merge(Codes_Pays,PIB_par_habitant_17, by='Code zone', all.x=TRUE)
+
+risque_pays_envaffaires <- read_csv2("P9_01_donnees/risque_pays_envaffaires.csv")
+
+names(risque_pays_envaffaires)=c('Zone','indice_risque','indice_affaires')
+
+Codes_Pays = merge(Codes_Pays,risque_pays_envaffaires, by='Zone', all.x=TRUE)
+
+distance_France <- read_csv2("P9_01_donnees/distance_France.csv")
+
+names(distance_France)=c('Code zone (ISO3)','distance_km')
+
+Codes_Pays = merge(Codes_Pays, distance_France, by='Code zone (ISO3)', all.x=TRUE)
+
+# Pourcentage de disponibilité en protéine animale
+
+Codes_Pays['dispo_alim_prot_anim_%']=Codes_Pays['Disponibilité de protéines en quantité (g/personne/jour) Produits Animaux']/Codes_Pays['Disponibilité de protéines en quantité (g/personne/jour) Total General']*100
+
+# Volaille importée consommée par habitant 
+
+Codes_Pays['import_volaille_kg_hab_an'] = (Codes_Pays['Importations_volaille_ktonne'] * 1000000) / Codes_Pays['Population']
+
+# Volaille produite nationalement par habitant
+
+Codes_Pays['prod_volaille_kg_hab_an'] = (Codes_Pays['Production_volaille_ktonne'] * 1e6) / Codes_Pays['Population']
+
+# On remplace les valeurs d'indices par des nombres
+
+Codes_Pays$indice_risque  = as.numeric(factor(Codes_Pays$indice_risque, levels=c('A1', 'A2', 'A3', 'A4', 'B', 'C', 'D', 'E')))
+
+Codes_Pays$indice_affaires  = as.numeric(factor(Codes_Pays$indice_affaires, levels=c('A1', 'A2', 'A3', 'A4', 'B', 'C', 'D', 'E')))
+
+
+Codes_Pays
+
+#write.csv(x=Codes_Pays,file='donnes_pays.csv')
+
+```
+
+## Analyse
+```{r message=FALSE}
+library("FactoMineR")
+library("factoextra")
+library(ggpubr)
+library(corrplot)
+library("lattice")
+library(Factoshiny)
+library(readr)
+
+
+
+donnees_pays <- read_csv2("P9_01_donnees/donnes_pays.csv")
+
+# Je cherche le pourcentage de valeurs manquantes pour chaque colonne du dataset
+
+round(sort(colMeans(is.na(donnees_pays)), decreasing = TRUE) * 100)
+
+# Je cherche le nombre de valeurs manquantes pour chaque colonne ayant des valeurs manquantes
+
+summary(donnees_pays[,c(1,5,15,16)])
+
+# Je cherche le nombre de valeurs manquantes pour les petits pays après avoir vu que les valeurs manquantes pour les indices sont pour des petits pays en général
+
+summary(donnees_pays[donnees_pays$Population<=550000,])
+
+# 14 pays en dessous de 550 000 habitants ont des valeurs manquantes pour les indices , on les supprime
+
+donnees_pays=donnees_pays[donnees_pays$Population>=550000,]
+
+summary(donnees_pays)
+```
+
+
+```{r warning=FALSE}
+row.names(donnees_pays) <- donnees_pays$`Code zone (ISO3)`
+```
+
+
+```{r}
+# Je supprime les variables qualitatives
+donnees_pays.quantitative=donnees_pays[,5:20]
+
+donnees_pays.quanti=donnees_pays.quantitative[,-6]
+```
+
+
+```{r warning=FALSE}
+rownames(donnees_pays.quanti)= donnees_pays$`Code zone (ISO3)`
+```
+
+
+```{r}
+# Je garde les variables quantitatives
+donnees_pays_quan_na=donnees_pays[,c(1,5:20)]
+
+donnees_pays_quan_na[is.na(donnees_pays_quan_na$indice_affaires),]
+
+# 8 pays n'ont pas d'indices on les elimine
+donnees_pays_quan_na=subset(donnees_pays_quan_na,!is.na(donnees_pays_quan_na$indice_affaires))
+
+# Imputations pour les distance_km
+
+donnees_pays_quan_na[is.na(donnees_pays_quan_na$distance_km),][1,14]<-5908
+donnees_pays_quan_na[is.na(donnees_pays_quan_na$distance_km),][1,14]<-1928
+donnees_pays_quan_na[is.na(donnees_pays_quan_na$distance_km),][1,14]<-2251
+donnees_pays_quan_na[is.na(donnees_pays_quan_na$distance_km),][1,14]<-1850
+donnees_pays_quan_na[is.na(donnees_pays_quan_na$distance_km),][1,14]<-11788
+
+
+summary(donnees_pays_quan_na)
+```
+
+
+```{r warning=FALSE}
+rownames(donnees_pays_quan_na)=donnees_pays_quan_na$`Code zone (ISO3)`
+```
+
+
+```{r}
+#Je supprime la colonne prix_production_poulet_usd_tonne car trop de valeurs manquantes (94 valeurs manquantes soit 64%)
+
+donnees_pays_quan_na=donnees_pays_quan_na[,-7]
+
+#Je supprime les pays avec des valeurs manquantes
+
+donnees_pays_quan_na=na.omit(donnees_pays_quan_na)
+```
+
+
+```{r warning=FALSE}
+rownames(donnees_pays_quan_na)=donnees_pays_quan_na$`Code zone (ISO3)`
+```
+
+
+```{r}
+#Je garde les variables quantitatives qui m'intéressent
+
+donnees_pays_quan_n=donnees_pays_quan_na[,c(2:7,10:16)]
+```
+
+
+```{r warning=FALSE}
+rownames(donnees_pays_quan_n)=donnees_pays_quan_na$`Code zone (ISO3)`
+```
+
+
+```{r}
+#Je change le nom de certaines colonnes
+
+names(donnees_pays_quan_n)
+
+names(donnees_pays_quan_n)[names(donnees_pays_quan_n) == 'Disponibilité alimentaire (Kcal/personne/jour) Produits Animaux'] <- 'disp_alim_anim'
+
+names(donnees_pays_quan_n)[names(donnees_pays_quan_n) == 'Disponibilité alimentaire (Kcal/personne/jour) Total General'] <- 'disp_alim_gen'
+
+
+names(donnees_pays_quan_n)[names(donnees_pays_quan_n) == 'Disponibilité de protéines en quantité (g/personne/jour) Produits Animaux'] <- 'disp_alim_anim_prot'
+
+names(donnees_pays_quan_n)[names(donnees_pays_quan_n) == 'Disponibilité de protéines en quantité (g/personne/jour) Total General'] <- 'disp_alim_gen_prot'
+```
+### Méthode de CAH (Dendrogramme)
+
+```{r message=FALSE}
+
+donnees_pays.cah = scale(donnees_pays_quan_n) # on normalise les données
+
+donnees_pays.resultat=hclust(dist(donnees_pays.cah),method="ward.D2")
+
+png(file="dendrogramme.png",width=1800,height=750)
+par(cex=0.8, mar=c(5, 8, 4, 1))
+plot(donnees_pays.resultat, xlab="", ylab="", main="", hang = -1)
+title(xlab="Pays", ylab="Hauteur", main="")
+par(cex=2)
+dev.off()
+
+donnees_pays.cah.groupes = factor(cutree(donnees_pays.resultat, 5))
+
+print(sort(donnees_pays.cah.groupes))
+```
+
+### Recherche des parangons (CAH)
+```{r message=FALSE}
+
+
+centroides = data.frame() # je créé un df vide
+# pour chaque groupes,
+nom_groupes = unique(donnees_pays.cah.groupes)
+for (i in nom_groupes) {
+  # je recupere les valeurs du cluster
+  groupe = subset(donnees_pays.cah, donnees_pays.cah.groupes == i)
+  # je calcule le centroide en faisant une moyenne par colonne
+  centroid = colMeans(groupe, na.rm = TRUE)
+  # je l'ajoute au df
+  centroides = rbind(centroides, centroid)
+}
+
+names(centroides) = names(centroid)
+rownames(centroides) = nom_groupes
+
+dist_cent_pays = dist(rbind(donnees_pays.cah, centroides))
+# on convertie l'objet dist en matrice
+dist_cent_pays = as.matrix(dist_cent_pays)
+# on restreint
+dist_cent_pays = dist_cent_pays[as.character(nom_groupes), 
+                                row.names(donnees_pays_quan_n)]
+
+
+nv_noms_groupes = c()
+for (nom in nom_groupes) {
+  pays = names(which.min(dist_cent_pays[nom,]))
+  nv_nom =  paste(nom, ' (', pays, ')', sep = '')
+  nv_noms_groupes = c(nv_noms_groupes, nv_nom)
+}
+
+rownames(centroides) = nv_noms_groupes
+
+
+png(file="heatmap_centroides.png",width=1800,height=750)
+heatmap(t(as.matrix(centroides)), Rowv = NA, Colv = NA, margins = c(6,6))
+dev.off()
+```
+### Méthode des K-means
+
+```{r message=FALSE}
+
+
+groupes.kmeans <- kmeans(donnees_pays.cah,centers=5,nstart=10)
+
+print(sort(groupes.kmeans$cluster))
+
+#inertie expliquée
+inertie.expl <- rep(0,times=10)
+for (k in 2:10){
+clus <- kmeans(na.omit(donnees_pays.cah),centers=k,nstart=5)
+inertie.expl[k] <- clus$betweenss/clus$totss
+}
+
+png(file="inertie_expliquee.png",width=1400,height=750)
+plot(1:10,inertie.expl,type="b",xlab="Nb. de groupes",ylab="% inertie expliquée")
+dev.off()
+```
+### Recherche des parangons (K-means)
+
+```{r message=FALSE}
+#Je veux trouver les pays les plus proches des centroides
+
+centroides_k = data.frame() # je créé un df vide
+# pour chaque groupes,
+nom_groupes_k = unique(groupes.kmeans$cluster)
+for (i in nom_groupes_k) {
+  # je recupere les valeurs du cluster
+  groupe = subset(donnees_pays.cah,groupes.kmeans$cluster == i)
+  centroid_k=groupes.kmeans$centers[i,]
+  centroides_k = rbind(centroides_k,centroid_k)
+}
+
+names(centroides_k) = names(centroid_k)
+rownames(centroides_k) = nom_groupes_k
+
+# Je calcule la distance entre chaque pays et chaque centroides
+dist_cent_pays_k = dist(rbind(donnees_pays.cah, centroides_k))
+
+dist_cent_pays_k=as.matrix(dist_cent_pays_k)
+
+
+dist_cent_pays_k = dist_cent_pays_k[as.character(nom_groupes),rownames(donnees_pays.cah)]
+
+nv_noms_groupes_k = c()
+for (noms in nom_groupes_k) {
+  pays_k = names(which.min(dist_cent_pays_k[noms,]))
+  nv_nom_k =  paste(noms, ' (', pays_k, ')', sep = '')
+  nv_noms_groupes_k = c(nv_noms_groupes_k, nv_nom_k)
+}
+rownames(centroides_k) = nv_noms_groupes_k
+
+png(file="heatmap_centroides_k_means.png",width=1800,height=750)
+heatmap(t(as.matrix(centroides_k)), Rowv = NA, Colv = NA, margins = c(6,6))
+dev.off()
+```
+### ACP sur l'ensemble des pays
+
+```{r message=FALSE, warning=FALSE}
+donnees.pca.result = PCA(donnees_pays_quan_n,scale.unit = TRUE)
+```
+
+
+```{r message=FALSE, warning=FALSE}
+dimdesc(donnees.pca.result, axes=1:2, proba=0.05)
+```
+
+
+```{r message=FALSE, warning=FALSE}
+get_eigenvalue(donnees.pca.result)
+```
+
+
+```{r message=FALSE, warning=FALSE}
+png(file="valeurs_propres_eboulis.png",width=1800,height=750)
+fviz_eig(donnees.pca.result, addlabels = TRUE, ylim = c(0, 50))
+dev.off()
+```
+
+
+```{r message=FALSE, warning=FALSE}
+#Graphe des variables
+
+png(file="graphe_des_variables_monde.png",width=1800,height=750)
+plot.PCA(donnees.pca.result,choix='var',habillage = 'cos2',cex=1,cex.main=1,cex.axis=1,title="Graphe des variables de l'ACP")
+dev.off()
+```
+
+
+```{r message=FALSE, warning=FALSE}
+#Graphe des individus
+figure=fviz_pca_ind(donnees.pca.result, 
+             geom=c("text", 'point'),
+             labelsize=4,
+             habillage = donnees_pays.cah.groupes,
+             alpha.ind="cos2",
+             addEllipses=TRUE,
+             repel = TRUE,
+             mean.point = FALSE)
+
+tiff("individus.tiff", units="in", width=16, height=10, res=300)
+print(figure)
+dev.off() 
+figure
+```
+
+### ACP sur le groupe de la france (CAH)
+
+```{r}
+groupe = donnees_pays.cah.groupes['FRA']
+
+groupe
+```
+
+
+```{r}
+sort(donnees_pays.cah.groupes)
+
+donnees_pays_gr_fr=donnees_pays_quan_na[donnees_pays.cah.groupes == groupe,]
+```
+
+
+```{r warning=FALSE}
+rownames(donnees_pays_gr_fr)=donnees_pays_gr_fr$`Code zone (ISO3)`
+```
+
+
+```{r}
+donnees_pays_gr_fra=donnees_pays_gr_fr[,-1]
+
+#Je prends les colonnes qui m'interessent
+
+donnees_pays_gr_fra=donnees_pays_gr_fra[,c(1,9,10,11,12,14,15)]
+```
+
+
+```{r warning=FALSE}
+rownames(donnees_pays_gr_fra)=donnees_pays_gr_fr$`Code zone (ISO3)`
+```
+
+
+```{r message=FALSE}
+#write.csv(x=donnees_pays_gr_fra,file="groupe_france_cah.csv")
+
+donnees_pays_gr_france<-read_csv2("P9_01_donnees/groupe_france_cah.csv")
+
+
+```
+
+
+```{r warning=FALSE}
+rownames(donnees_pays_gr_france)=donnees_pays_gr_france$`Code zone (ISO3)`
+```
+
+
+```{r}
+donnees_pays_groupe_france=donnees_pays_gr_france[,-1]
+```
+
+
+```{r warning=FALSE}
+rownames(donnees_pays_groupe_france)=rownames(donnees_pays_gr_france)
+```
+
+
+```{r message=FALSE}
+# ACP 
+donnees_pays_gr_fra.result=PCA(donnees_pays_groupe_france)
+
+```
+
+
+```{r message=FALSE}
+dimdesc(donnees_pays_gr_fra.result, axes=1:2, proba=0.05)
+```
+
+
+```{r message=FALSE}
+png(file="valeurs_propres_eboulis_gr_france.png",width=1800,height=750)
+fviz_eig(donnees_pays_gr_fra.result, addlabels = TRUE, ylim = c(0, 50))
+dev.off()
+```
+
+
+```{r message=FALSE}
+#Graphe des variables
+
+png(file="graphe_des_variables_groupe_france.png",width=1800,height=750)
+plot.PCA(donnees_pays_gr_fra.result,choix='var',habillage = 'cos2',cex=1.2,cex.main=1.5,cex.axis=1.5,title="Graphe des variables de l'ACP")
+dev.off()
+```
+
+
+```{r message=FALSE}
+#Graphe des individus
+
+png(file="graphe_des_individus_groupe_france.png",width=1800,height=750)
+plot.PCA(donnees_pays_gr_fra.result,habillage='cos2',title="Graphe des individus de l'ACP",cex=1.15,cex.main=1.15,cex.axis=1.15)
+dev.off()
+```
+### ACP avec le groupe de la france (K-means)
+```{r}
+
+groupe_france_k=groupes.kmeans$cluster['FRA']
+
+groupe_france_k
+
+groupe_france_k_donnees=donnees_pays_quan_na[groupes.kmeans$cluster == groupe_france_k,]
+```
+
+
+```{r warning=FALSE}
+row.names(groupe_france_k_donnees)=groupe_france_k_donnees$`Code zone (ISO3)`
+```
+
+
+```{r}
+groupe_france_k_donnees_1=groupe_france_k_donnees[,-1]
+
+groupe_france_k_donnees_1=groupe_france_k_donnees_1[,c(1,9,10,11,12,14,15)]
+```
+
+
+```{r warning=FALSE}
+rownames(groupe_france_k_donnees_1)=groupe_france_k_donnees$`Code zone (ISO3)`
+```
+
+
+```{r message=FALSE}
+#write.csv(x=groupe_france_k_donnees_1,file="groupe_france_kmeans_1.csv")
+
+groupe_france_kmeans_=read_csv2("P9_01_donnees/groupe_france_kmeans_1.csv")
+
+
+```
+
+
+```{r warning=FALSE}
+rownames(groupe_france_kmeans_)=groupe_france_kmeans_$`Code zone(ISO3)`
+```
+
+
+
+```{r}
+groupe_france_kmeans=groupe_france_kmeans_[,-1]
+```
+
+
+
+```{r warning=FALSE}
+rownames(groupe_france_kmeans)=groupe_france_kmeans_$`Code zone(ISO3)`
+```
+
+
+```{r message=FALSE}
+#ACP
+groupe_france_kmeans.result=PCA(groupe_france_kmeans)
+```
+
+
+```{r message=FALSE}
+dimdesc(groupe_france_kmeans.result, axes=1:2, proba=0.05)
+```
+
+
+```{r message=FALSE}
+png(file="valeurs_propres_eboulis_gr_france_k_means.png",width=1800,height=750)
+fviz_eig(groupe_france_kmeans.result, addlabels = TRUE, ylim = c(0, 50))
+dev.off()
+```
+
+
+```{r message=FALSE}
+#Graphe des variables
+
+png(file="graphe_des_variables_groupe_france_kmeans.png",width=1800,height=750)
+plot.PCA(groupe_france_kmeans.result,choix='var',habillage = 'cos2',cex=1.2,cex.main=1.5,cex.axis=1.5,title="Graphe des variables de l'ACP")
+dev.off()
+```
+
+
+```{r message=FALSE}
+#Graphe des individus 
+
+png(file="graphe_des_individus_groupe_france_kmeans.png",width=1800,height=750)
+plot.PCA(groupe_france_kmeans.result,habillage='cos2',title="Graphe des individus de l'ACP",cex=1.15,cex.main=1.15,cex.axis=1.15)
+dev.off()
+
+```
+
+
+
+
+
+
+
+
+
